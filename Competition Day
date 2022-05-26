@@ -1,0 +1,1130 @@
+
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "Adafruit_TCS34725softi2c.h"
+#include <SoftwareSerial.h>
+#include <Pixy.h>
+#include <Servo.h>
+
+#define txPin 14
+
+Pixy pixy;
+Servo arm_servo;
+
+//====================================================================================================================
+//   Variables
+//=====================================================================================================================
+
+
+//****Color Sensor Variables *****
+//current
+int currColor;
+
+int assignedColor = 0;
+int currentQuadrant = 0;
+int YELLOW = 1;
+int ORANGE = 2;
+int GREEN = 3;
+int RED = 4;
+int GREY = 5;
+
+//Return assignedColor for front and back sensors
+int frontColor;
+int backColor;
+
+int secondFrontColor;
+int secondBackColor;
+
+// Central Hue Value for each Color
+int redH = 8; //0 - 10
+int greenH = 120; //95 -115
+int yellowH = 47;//39-49
+int orangeH = 20;//19-29
+//int greyH = 35; //30-40
+
+
+
+
+
+//****Motor Variables *****
+const int SWITCH_PORT = 51;
+const int rightMotor = 12;
+const int leftMotor = 13;
+
+const int rightBrake = 9;
+const int leftBrake = 8;
+
+const int rightSpeed = 3;
+const int leftSpeed = 11;
+
+int diffThreshold;
+
+int LEFT_MOTOR_VAL = 0;
+int RIGHT_MOTOR_VAL = 0;
+float kmod;
+float K;
+
+float BASE_SPEED = 90;
+
+
+
+int STATE;
+const int STOP = 1;
+const int GO = 0;
+
+
+//****IR Variables *****
+int IR = 50;
+int ValIR;
+
+//****LCD Variables *****
+SoftwareSerial LCD = SoftwareSerial(0, txPin);
+const int LCDdelay = 10;
+
+int hue_f;
+int hue_b;
+
+float sat_f;
+float sat_b;
+
+//****Pixy Variables *****
+//
+
+uint16_t blocks;
+char buf[32];
+int k;
+bool egg_found = false;
+int targetedEgg;
+static int j = 0;
+
+int x_position;
+int y_position;
+double height;
+double width;
+double ratioHeightToWidth;
+
+int trackedBlock;
+
+
+//****Servo Variables *****
+
+
+//================================================================================================
+//   Setup
+//================================================================================================
+
+void setup() {
+
+  Serial.begin(9600);
+  Serial.println("--Serial port started--");
+  pinMode(SWITCH_PORT, INPUT_PULLUP);
+
+  //Channel A- Right
+  pinMode(rightMotor, OUTPUT);  //Initiates Motor
+  pinMode(rightBrake, OUTPUT);   //Initiates Brake
+
+  //Channel B-Left
+  pinMode(leftMotor, OUTPUT);  //Initiates Motor
+  pinMode(leftBrake, OUTPUT);   //Initiates Brake
+
+  pinMode(IR, INPUT); //Initiate Right Sensor
+  //pinMode(leftIR, INPUT);  //Initiate Left Sensor
+
+  //setupColorSensor();
+  setupLCD();
+  setupServo();
+  pixy.init();
+
+}
+
+//================================================================================================
+//   LOOP Function
+//================================================================================================
+void loop() {
+
+  if (digitalRead(SWITCH_PORT)) {
+
+    // If Assigned Quadrant Color has not been detected
+    if (assignedColor == 0) {
+      armUp();
+
+      // Store Assigned Color
+      getAssignedColor();
+
+      // Once Assigned Color is stored, find egg of that color
+    } else if (assignedColor != 0) {
+
+      //if there is no egg currently
+      if (egg_found == false) {
+        
+        armUp();
+        getEgg();
+
+        //if egg_found == true
+      } else  {
+      goHome();
+
+        //closes if egg_found == true clause
+      }
+
+
+    }
+    // update motor speed once per loop.
+    motorControl();
+
+    //closes if switch is on loop
+
+  } else {
+
+    //stop
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+
+
+  }
+
+}
+
+
+
+
+
+//================================================================================================
+//   Motion Functions
+//================================================================================================
+
+void motorControl() {
+  int left_speed = LEFT_MOTOR_VAL;
+  int right_speed = RIGHT_MOTOR_VAL + 5;
+
+  Serial.print("Left: ");
+  Serial.print(left_speed);
+  Serial.print("  Right: ");
+  Serial.println(right_speed);
+
+  if (left_speed == 0) {
+    //Engage Brakes
+    digitalWrite(leftBrake, HIGH);//Left Brake
+  }
+  else {
+    //Disengage Brakes
+    digitalWrite(leftBrake, LOW);//Left Brake
+  }
+  if (right_speed == 0) {
+    //Engage Brakes
+    digitalWrite(rightBrake, HIGH);//Right Brake
+  }
+  else {
+    //Disengage Brakes
+    digitalWrite(rightBrake, LOW);//Right Brake
+  }
+  if (left_speed < 0) {
+    digitalWrite (leftMotor, HIGH);//Left Wheel turns backwards
+
+  } else {
+    digitalWrite (leftMotor, LOW);//Left Wheel turns forward
+  }
+  if (right_speed < 0) {
+    digitalWrite (rightMotor, LOW);//Right Wheel turns backwards
+
+  } else {
+    digitalWrite (rightMotor, HIGH);//Right Wheel turns forward
+  }
+
+  analogWrite(rightSpeed, abs(right_speed));
+  analogWrite(leftSpeed, abs(left_speed));
+
+}
+
+
+////===============================================================================
+////   Servo Functions
+////================================================================================
+//
+void armDown() {
+  arm_servo.write(5);
+}
+
+
+void armUp() {
+  arm_servo.write(70);
+}
+
+void setupServo() {
+  arm_servo.attach(45);
+}
+
+
+//================================================================================================
+//   Pixy Functions
+//================================================================================================
+
+void getEgg() {
+
+
+
+  blocks = pixy.getBlocks();
+
+
+  if (blocks) {
+    j++;
+    // Print every 50 frames
+    if (j % 100 == 0) {
+      //sprintf(buf, "Detected %d:\n", blocks);
+      //Serial.print(buf);
+    }
+
+    trackBlock(blocks);
+
+
+    //close if blocks exist clause
+  } else {
+
+    //if there are no blocks at all
+
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+
+
+  }
+
+
+
+}
+
+
+
+
+
+int oldX, oldY;
+int oldSignature = 0;
+
+void trackBlock(int blockCount) {
+
+  int targetedEgg = 0;
+  long maxSize = 0;
+
+
+  for (int i = 0; i < blockCount; i++)
+  {
+
+    //if there are blocks of matching color
+    if (pixy.blocks[i].signature  == assignedColor) {
+
+
+      //if there is no existing signature of if the new block detected matching the old signature
+      if ((oldSignature == 0) || (pixy.blocks[i].signature == oldSignature))
+      {
+
+        //save new size of block
+        long newSize = pixy.blocks[i].height * pixy.blocks[i].width;
+        int32_t size = 400;
+
+        //if new size of block is bigger than largest prior size AND the ratio of the new height to width is greater than 0.9
+        if (newSize > maxSize)
+        {
+          //set block i as the targeted egg
+          targetedEgg = i;
+
+          //the largest size is set to the new size
+          maxSize = newSize;
+
+        }
+
+        //        } else {
+        //
+        //           LEFT_MOTOR_VAL = (BASE_SPEED + (x_position*0.15));
+        //           RIGHT_MOTOR_VAL =   (BASE_SPEED - (x_position*0.15));
+        //
+        //
+        //          }
+
+        x_position =  pixy.blocks[targetedEgg].x - 160;
+        y_position = pixy.blocks[targetedEgg].y - 100;
+        height = pixy.blocks[targetedEgg].height;
+        width = pixy.blocks[targetedEgg].width;
+        ratioHeightToWidth = (height / width);
+        // kmod = 1000 / maxSize;
+        K = 0.3;
+
+        // Size is the area of the object.
+        // We keep a running average of the last 8.
+        size += pixy.blocks[targetedEgg].width * pixy.blocks[targetedEgg].height;
+        size -= size >> 3;
+        int BASE_SPEED = constrain(100 - (size / 220), -100, 100);
+
+
+
+        //        LEFT_MOTOR_VAL = (BASE_SPEED) + (x_position*K);
+        //        RIGHT_MOTOR_VAL = (BASE_SPEED) - (x_position*K);
+
+        int lSpeed = (BASE_SPEED) + (x_position * K);
+        int rSpeed = (BASE_SPEED) - (x_position * K);
+
+        diffThreshold = abs((leftSpeed - rightSpeed));
+
+
+        if ((diffThreshold < 30) && ((20 > x_position) || (-20 < x_position))) {
+
+          LEFT_MOTOR_VAL = (BASE_SPEED + (x_position * 0.15));
+          RIGHT_MOTOR_VAL =   (BASE_SPEED - (x_position * 0.15));
+
+        } else {
+          LEFT_MOTOR_VAL = lSpeed;
+          RIGHT_MOTOR_VAL = rSpeed;
+
+        }
+
+
+
+        Serial.print("Sig:\t");
+        Serial.print(pixy.blocks[targetedEgg].signature);
+        Serial.print("\tRatio:\t");
+        Serial.print(ratioHeightToWidth);
+        Serial.print("\tY Coor:\t");
+        Serial.print(y_position);
+        Serial.print("\tX Coor:\t");
+        Serial.print(x_position);
+        Serial.print("\tHeight:\t");
+        Serial.print(height);
+        Serial.print("\tWidth:\t");
+        Serial.print(width);
+        Serial.print("\tSize:\t");
+        Serial.print(maxSize);
+        Serial.println("\n");
+
+
+        //If x_position < 0, turn left (right motor goes faster)
+        //If x_position > 0, turn right (left motor goes faster)
+
+
+
+
+
+     //closes if current block matches old signature
+      }
+
+      oldSignature = pixy.blocks[targetedEgg].signature;
+
+
+           if ((assignedColor == 1) && (ratioHeightToWidth > 0.70) && (y_position < 0) && (maxSize > 2200) && (diffThreshold < 10)) {
+      
+
+
+        //if egg is found egg_found is set to true
+        egg_found = true;
+        break;
+
+
+      }
+
+      if ((assignedColor == 2) && (ratioHeightToWidth > 0.80) && (y_position < 0) && (maxSize > 3000) && (diffThreshold < 15)) {
+        //        LEFT_MOTOR_VAL = (BASE_SPEED) + (x_position * K);
+        //        RIGHT_MOTOR_VAL = (BASE_SPEED) - (x_position * K);
+
+
+        //if egg is found egg_found is set to true
+        egg_found = true;
+        break;
+
+
+      }
+
+
+      if ((assignedColor == 3) && (ratioHeightToWidth > 1.00) && (y_position < 0) && (maxSize > 6000) && (diffThreshold < 10)) {
+        //        LEFT_MOTOR_VAL = (BASE_SPEED) + (x_position * K);
+        //        RIGHT_MOTOR_VAL = (BASE_SPEED) - (x_position * K);
+
+
+        //if egg is found egg_found is set to true
+        egg_found = true;
+        break;
+      }
+
+       if ((assignedColor == 4) && (ratioHeightToWidth > 0.70) && (y_position < 0) && (maxSize > 700)) {
+
+        //
+
+        //if egg is found egg_found is set to true
+        egg_found = true;
+        break;
+
+      }
+
+
+ 
+
+
+
+      //closes IF a block matches matches Assigned Color clause
+    }
+
+
+
+
+
+    //closes for each block found loop
+  }
+
+  //if egg_found == false
+  //    if (egg_found == false) {
+  //    // No matching Egg was found so turn left slightly
+  //    //clearLCD();
+  //    lcdPosition(1, 0);
+  //    LCD.print("No Egg");
+  //    LEFT_MOTOR_VAL = BASE_SPEED;
+  //    RIGHT_MOTOR_VAL = BASE_SPEED;
+  //    motorControl();
+
+  //}
+
+  motorControl();
+
+}
+
+
+
+
+//================================================================================================
+//   IR Sensor Functions
+//================================================================================================
+void boundarySetup() {
+
+  //Read value from IR Sensors and print in Serial Window
+  ValIR = digitalRead(IR);
+
+  //If light surface detected, STATE is STOP
+  if (ValIR == 1) {
+    //Serial.println(ValIR);
+    STATE = STOP;
+  }
+  //If dark surface detected, STATE is GO
+  else {
+
+    //Serial.println(ValIR);
+    STATE = GO;
+  }
+}
+
+void detectBoundary() {
+
+  //STATE is STOP
+  if (STATE == STOP) {
+    //Back up
+    LEFT_MOTOR_VAL = -BASE_SPEED;
+    RIGHT_MOTOR_VAL = -BASE_SPEED;
+    motorControl();
+    delay(1000);
+
+    //Turn around
+    LEFT_MOTOR_VAL = - BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    delay(1000);
+  }
+}
+
+//================================================================================================
+//   RGB Color Sensor Setup
+//================================================================================================
+
+#define maxrgb 65535
+// You can use any digital pin for emulate SDA / SCL
+#define SDApinON_front 32
+#define SCLpinON_front 33
+
+#define SDApinON_back 30
+#define SCLpinON_back 31
+
+#define SDApinSS 6
+#define SCLpinSS 7
+
+// Implementing 2 RGB Sensors
+Adafruit_TCS34725softi2c tcsON_back = Adafruit_TCS34725softi2c(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X, SDApinON_back, SCLpinON_back);
+Adafruit_TCS34725softi2c tcsON_front = Adafruit_TCS34725softi2c(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X, SDApinON_front, SCLpinON_front);
+
+
+#define commonAnode true
+
+// our RGB -> eye-recognized gamma color
+byte gammatable[256];
+
+float h, s, v;
+
+void setupColorSensor() {
+  Serial.println("Color View Test!");
+
+  if (tcsON_front.begin() && tcsON_back.begin()) {
+    Serial.println("Found two sensors");
+  } else {
+    Serial.println("No TCS34725 found ... check your connections");
+    while (1); // halt!
+  }
+
+  for (int i = 0; i < 256; i++) {
+    float x = i;
+    x /= 255;
+    x = pow(x, 2.5);
+    x *= 255;
+
+    if (commonAnode) {
+      gammatable[i] = 255 - x;
+    } else {
+      gammatable[i] = x;
+    }
+    //Serial.println(gammatable[i]);
+  }
+}
+
+void getHueAndSat() {
+
+  uint16_t clear, redON, greenON, blueON;
+  uint16_t redSS, greenSS, blueSS;
+  gatherTCS(tcsON_front, &clear, &redON, &greenON, &blueON);
+  hue_f = h;
+  sat_f = s;
+  //Serial.print("Front Hue\t");
+  //Serial.print(hue_f);
+  //Serial.print("\tFront Sat\t");
+  //Serial.print(sat_f);
+  //Serial.print("\n");
+
+  gatherTCS(tcsON_back, &clear, &redON, &greenON, &blueON);
+  hue_b = h;
+  sat_b = s;
+  //  Serial.print("Back Hue\t");
+  //  Serial.print(hue_b);
+  //  Serial.print("\tBack Sat\t");
+  //  Serial.print(sat_b);
+  //  Serial.print("\n");
+}
+
+
+// Calculates hue, saturation and value from RGB
+void RGBtoHSV( float r, float g, float b)
+{
+  float min_rgb;
+  float max_rgb;
+  double delta;
+  min_rgb = min(min(r, g), b);
+  max_rgb = max(max(r, g), b);
+  v = max_rgb;        // v
+  delta = max_rgb - min_rgb;
+  //  Serial.print("min_rgb: ");
+  //  Serial.print(min_rgb);
+  //  Serial.print(" max_rgb: ");
+  //  Serial.println(max_rgb);
+  //  Serial.print(" delta: ");
+  //  Serial.println(delta);
+
+  if ( max_rgb != 0.0 )
+    s = delta / max_rgb;    // s
+  else {
+    // r = g = b = 0    // s = 0, v is undefined
+    s = 0;
+    h = -1;
+    return;
+  }
+  if ( r == max_rgb ) {
+    h = ( g - b ) / delta;    // between yellow & magenta
+  }
+  else if ( g == max_rgb ) {
+    h = 2 + ( b - r ) / delta;  // between cyan & yellow
+  }
+  else {
+    h = 4 + ( r - g ) / delta;  // between magenta & cyan
+  }
+  h *= 60;        // degrees
+  if ( h < 0 )
+    h += 360;
+}
+
+
+//gather information from the color sensor
+//RGBtoHSV() function is called inside this function
+void gatherTCS(Adafruit_TCS34725softi2c tcs, uint16_t clear, uint16_t red, uint16_t green, uint16_t blue) {
+
+  tcs.setInterrupt(false);      // turn on LED
+
+  delay(60);  // takes 50ms to read
+
+  tcs.getRawData(&red, &green, &blue, &clear);
+
+  tcs.setInterrupt(true);  // turn off LED
+
+  // Figure out some basic hex code for visualization
+  uint32_t sum = clear;
+  float r, g, b;
+  r = red; r /= maxrgb;
+  g = green; g /= maxrgb;
+  b = blue; b /= maxrgb;
+  r *= 256; g *= 256; b *= 256;
+
+  RGBtoHSV(r, g, b);
+  //  Serial.print("hue = "); Serial.print((int)h);
+  //    Serial.print(" saturation = "); Serial.print((float)s);
+  //    Serial.print(" value = "); Serial.println((float)v);
+
+  getHue((int)h);
+  //Serial.print("\n");
+  getSat((float)s);
+  //Serial.print("\n");
+  //Serial.print(",");
+  //Serial.println((float)v);
+
+}
+
+
+//================================================================================================
+//   RGB Color Sensor Functions
+//================================================================================================
+
+int getHue(int h) {
+  return h;
+}
+
+float getSat(float s) {
+  return s;
+}
+
+int getCurrentColor(int hue, float sat) {
+
+  //Find difference between hue reading and median hue value
+  // for each color
+  int diffR = abs(redH - hue);
+  int diffO = abs(orangeH - hue);
+  int diffY = abs(yellowH - hue);
+  int diffG = abs(greenH - hue);
+
+  //Find smallest of these differences
+  int minDiff = min(diffR, min(diffO , min (diffY, diffG)));
+
+  //if the smallest difference is equal to the difference between the hue reading and the median hue value for that color
+  //the sensor is currently at that particular color
+  if (minDiff == diffR && sat >= 0.35) {
+    Serial.println(" red");
+    currColor = RED;
+
+  } else if (minDiff == diffO && sat >= 0.35) {
+    Serial.println(" orange");
+    currColor = ORANGE;
+
+  } else if (minDiff == diffY && sat >= 0.35) {
+    Serial.println(" yellow");
+    currColor = YELLOW;
+
+
+  } else if (minDiff == diffG && sat >= 0.35) {
+    Serial.println(" green");
+    currColor = GREEN;
+
+  } else if (sat < 0.35) {
+    Serial.println(" grey");
+    currColor = GREY;
+
+  }
+  return currColor;
+}
+
+void getAssignedColor() {
+
+  getHueAndSat();
+  frontColor = getCurrentColor(hue_f, sat_f);
+  backColor =  getCurrentColor(hue_b, sat_b);
+
+  if (frontColor && backColor == GREY) {
+
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+
+    //Check Boundary Again
+    //getAssignedColor();
+
+  } else if ((frontColor != GREY && backColor == GREY) || (frontColor != GREY && backColor == NULL)) {
+    // Move Forward
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    delay(100);
+
+    //Stop and Take Reading
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    delay(500);
+    //    getAssignedColor();
+  }
+
+  //two cases
+  //robot overshoots boundary - if front sensor detects grey and the back sensor is at a colored boundary
+  //front sensor is at the tiny area between the two boundaries, front sensor will return NULL and the back sensor is at a colored boundary
+  else if ((frontColor == GREY && backColor != GREY) || (frontColor == NULL && backColor != GREY)) {
+
+    //Back up
+    LEFT_MOTOR_VAL = -BASE_SPEED;
+    RIGHT_MOTOR_VAL = -BASE_SPEED;
+    motorControl();
+    delay(1500);// or 100
+
+    //Stop and Take Reading
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    delay(1500);
+    // getAssignedColor();
+
+
+  }
+
+  //if both color sensors detect a colored boundary
+  else if (frontColor != GREY && backColor != GREY) {
+    //Stop and Analyze Boundary
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    colorVerification();
+  }
+  else {
+    //on rare occasions in which both sensors return NULL values
+    // Move Forward at a slower speed
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    //call function recursively - not sure if this is redundant since the code gets called in the loop as
+    //getAssignedColor();
+  }
+
+}
+
+
+void printAssignedColor() {
+
+  if (assignedColor == RED) {
+    clearLCD();
+    lcdPosition(0, 1);
+    LCD.print("Home: Red");
+
+
+  } if (assignedColor == YELLOW) {
+    clearLCD();
+    lcdPosition(0, 1);
+    LCD.print("Home: Yellow");
+
+  } if (assignedColor == GREEN) {
+    clearLCD();
+    lcdPosition(0, 1);
+    LCD.print("Home: Green");
+
+  } if (assignedColor == ORANGE) {
+    clearLCD();
+    lcdPosition(0, 1);
+    LCD.print("Home: Orange");
+
+  }
+
+}
+
+
+
+
+void colorVerification() {
+
+  //check if front color is yellow and back color is red
+  if  (frontColor == YELLOW && backColor == RED) {
+    assignedColor = RED;
+    Serial.println("Assigned Color: \t");
+    Serial.println("Red");
+    printAssignedColor();
+
+
+
+  } else if  (frontColor == GREEN && backColor == RED) {
+    assignedColor = RED;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Red");
+    printAssignedColor();
+
+
+
+  } else if  (frontColor == ORANGE && backColor == YELLOW) {
+    assignedColor = YELLOW;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Yellow");
+    printAssignedColor();
+
+
+
+  } else if  (frontColor == RED && backColor == YELLOW) {
+    assignedColor = YELLOW;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Yellow");
+    printAssignedColor();
+
+  } else if   (frontColor == ORANGE && backColor == GREEN) {
+    assignedColor = GREEN;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Green");
+    printAssignedColor();;
+
+
+  } else if  (frontColor == RED && backColor == GREEN) {
+    assignedColor = GREEN;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Green");
+    printAssignedColor();
+
+  } else if  (frontColor == YELLOW && backColor == ORANGE) {
+    assignedColor = ORANGE;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Orange");
+    printAssignedColor();
+
+  } else if   (frontColor == GREEN && backColor == ORANGE) {
+    assignedColor = ORANGE;
+    Serial.println("Assigned Color: \t");
+    Serial.print("Orange");
+    printAssignedColor();
+
+  } else {
+    //if robot is at an unlikely location (eg middle of the arena where front green and back is yellow)
+    //robot should back up
+    LEFT_MOTOR_VAL = -70;
+    RIGHT_MOTOR_VAL = -70;
+    motorControl();
+    delay(1000);
+    //getAssignedColor();
+  }
+}
+
+
+
+void getCurrentQuadrant() {
+
+  getHueAndSat();
+  secondFrontColor = getCurrentColor(hue_f, sat_f);
+  secondBackColor =  getCurrentColor(hue_b, sat_b);
+
+  if ( secondFrontColor && secondBackColor == GREY) {
+
+         LEFT_MOTOR_VAL = BASE_SPEED;
+          RIGHT_MOTOR_VAL = BASE_SPEED * 0.8;
+          motorControl();
+          delay(1000);
+
+
+
+          LEFT_MOTOR_VAL = BASE_SPEED;
+          RIGHT_MOTOR_VAL = BASE_SPEED;
+          motorControl();
+          delay(4000);
+
+
+    //Check Boundary Again
+    //getAssignedColor();
+
+  } else if (( secondFrontColor != GREY && secondBackColor == GREY) || ( secondFrontColor != GREY && secondBackColor == NULL)) {
+    // Move Forward
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    delay(100);
+
+    //Stop and Take Reading
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    delay(1000);
+    //    getAssignedColor();
+  }
+
+  //two cases
+  //robot overshoots boundary - if front sensor detects grey and the back sensor is at a colored boundary
+  //front sensor is at the tiny area between the two boundaries, front sensor will return NULL and the back sensor is at a colored boundary
+  else if (( secondFrontColor == GREY && secondBackColor != GREY) || ( secondFrontColor == NULL && secondBackColor != GREY)) {
+
+    //Back up
+    LEFT_MOTOR_VAL = -BASE_SPEED;
+    RIGHT_MOTOR_VAL = -BASE_SPEED;
+    motorControl();
+    delay(2000);// or 100
+
+    //Stop and Take Reading
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    delay(1500);
+    // getAssignedColor();
+
+
+  }
+
+  //if both color sensors detect a colored boundary
+  else if ( secondFrontColor != GREY && secondBackColor != GREY) {
+    //Stop and Analyze Boundary
+    LEFT_MOTOR_VAL = 0;
+    RIGHT_MOTOR_VAL = 0;
+    motorControl();
+    goHomeColorVerification();
+    delay(1000);
+  }
+
+  else {
+    //on rare occasions in which both sensors return NULL values
+    // Move Forward at a slower speed
+    LEFT_MOTOR_VAL = BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    //call function recursively - not sure if this is redundant since the code gets called in the loop as
+    //getAssignedColor();
+  }
+
+}
+
+void goHomeColorVerification() {
+
+  //check if front color is yellow and back color is red
+  if  (secondFrontColor == RED && secondBackColor == YELLOW) {
+    currentQuadrant = RED;
+    Serial.println("curr Color: \t");
+    Serial.println("Red");
+
+
+
+
+  } else if  ( secondFrontColor == RED && secondBackColor == GREEN) {
+    currentQuadrant = RED;
+    Serial.println("curr Color: \t");
+    Serial.print("Red");
+
+
+
+
+  } else if  ( secondFrontColor == YELLOW && secondBackColor == ORANGE) {
+    currentQuadrant = YELLOW;
+    Serial.println("curr Color: \t");
+    Serial.print("Yellow");
+
+
+
+  } else if  ( secondFrontColor == YELLOW && secondBackColor == RED) {
+    currentQuadrant = YELLOW;
+    Serial.println("curr Color: \t");
+    Serial.print("Yellow");
+
+
+
+
+  } else if   ( secondFrontColor == GREEN && secondBackColor == ORANGE) {
+    currentQuadrant = GREEN;
+    Serial.println("curr Color: \t");
+    Serial.print("Green");
+
+
+
+  } else if  ( secondFrontColor == GREEN && secondBackColor == RED) {
+    currentQuadrant = GREEN;
+    Serial.println("curr Color: \t");
+    Serial.print("Green");
+
+
+
+  } else if  ( secondFrontColor == ORANGE && secondBackColor == YELLOW) {
+    currentQuadrant = ORANGE;
+    Serial.println("curr Color: \t");
+    Serial.print("Orange");
+
+
+  } else if   ( secondFrontColor == ORANGE && secondBackColor == GREEN) {
+    currentQuadrant = ORANGE;
+    Serial.println("curr Color: \t");
+    Serial.print("Orange");
+
+
+
+
+  } else {
+    //if robot is at an unlikely location (eg middle of the arena where front green and back is yellow)
+    //robot should back up
+    LEFT_MOTOR_VAL = -70;
+    RIGHT_MOTOR_VAL = -70;
+    motorControl();
+    delay(1000);
+
+  }
+}
+
+
+void goHome() {
+
+
+        if ((currentQuadrant == 0) && (currentQuadrant != assignedColor)) {
+          Serial.println(currentQuadrant);
+          armDown();
+          getCurrentQuadrant();
+
+
+     
+
+        } else if (currentQuadrant == assignedColor) {
+          Serial.println("I'm home");
+  
+          LEFT_MOTOR_VAL = BASE_SPEED;
+          RIGHT_MOTOR_VAL = BASE_SPEED;
+          motorControl();
+          delay(5000);
+          armUp();
+        }
+
+
+
+}
+//================================================================================================
+//   LCD Functions
+//================================================================================================
+
+// Place cursor to specific row and column
+//    (top row = 0, bottom row = 1)
+void lcdPosition(int row, int col) {
+  LCD.write(0xFE);   //command flag
+  LCD.write((col + row * 64 + 128));  //position
+  delay(LCDdelay);
+}
+void clearLCD() {
+  LCD.write(0xFE);   //command flag
+  LCD.write(0x01);   //clear command.
+  delay(LCDdelay);
+}
+void backlightOn() {  //turns on the backlight
+  LCD.write(0x7C);   //command flag for backlight stuff
+  LCD.write(157);    //light level.
+  delay(LCDdelay);
+}
+void backlightOff() { //turns off the backlight
+  LCD.write(0x7C);   //command flag for backlight stuff
+  LCD.write(128);     //light level for off.
+  delay(LCDdelay);
+}
+void serCommand() {  //a general function to call the command flag for issuing all other commands
+  LCD.write(0xFE);
+}
+
+
+void setupLCD()
+{
+  pinMode(txPin, OUTPUT);
+  LCD.begin(9600);
+
+  clearLCD();
+  lcdPosition(0, 3);
+  LCD.print("Black Lives");
+  lcdPosition(1, 5);
+  LCD.print("Matter");
+
+}
+
+
+
