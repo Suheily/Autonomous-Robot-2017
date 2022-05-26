@@ -1,0 +1,131 @@
+#include <Debounce.h>
+
+
+const int SWITCH_PORT = 52;
+const int rightMotor = 12;
+const int leftMotor = 13;
+
+const int rightBrake = 9;
+const int leftBrake = 8;
+
+const int rightSpeed = 3;
+const int leftSpeed = 11;
+
+int STATE;
+const int STOP = 1;
+const int GO = 0;
+
+int rightIR = 53;
+//int leftIR = 12;
+
+int rightValIR;
+//int leftValIR;
+
+
+void setup() {
+  // put your setup code here, to run once:
+
+  Serial.begin(9600);
+  Serial.println("--Serial port started--");
+  pinMode(SWITCH_PORT, INPUT);
+
+  //Channel A- Right
+  pinMode(rightMotor, OUTPUT);  //Initiates Motor
+  pinMode(rightBrake, OUTPUT);   //Initiates Brake
+
+  //Channel B-Left
+  pinMode(leftMotor, OUTPUT);  //Initiates Motor
+  pinMode(leftBrake, OUTPUT);   //Initiates Brake
+
+  pinMode(rightIR, INPUT); //Initiate Right Sensor
+  //pinMode(leftIR, INPUT);  //Initiate Left Sensor
+
+}
+
+
+
+void loop() {
+
+    IRsensor();
+    whiteBoundary();
+ 
+}
+
+
+void moveForward() {
+
+  //Disengage Brakes
+  digitalWrite(rightBrake, LOW);//Right Brake
+  digitalWrite(leftBrake, LOW);//Left Brake
+
+  //Move wheels Forward
+  digitalWrite (rightMotor, HIGH);//Right Wheel
+  //Move left backward 
+  digitalWrite (leftMotor, LOW);//Left Wheel
+
+  //Spins motor at half speed
+  analogWrite(rightSpeed, 100);
+  analogWrite(leftSpeed, 100);
+}
+
+
+void IRsensor() {
+
+  //Read value from IR Sensors and print in Serial Window
+  rightValIR = digitalRead(rightIR);
+  Serial.println(rightValIR);
+  
+  //leftValIR = digitalRead(leftIR);
+
+  //If light surface detected, STATE is STOP
+  if (rightValIR == 1) {
+    STATE = STOP;
+    Serial.println("white color detected");
+  }
+  //If dark surface detected, STATE is GO
+  else {
+    STATE = GO;
+     Serial.println("other color detected");
+  }
+}
+
+void whiteBoundary() {
+
+  //Call stopMoving function if STATE is STOP
+  if (STATE == STOP) {
+    //turnLeft();
+  }
+  //Call moveForward function if STATE is GO
+  if (STATE == GO) {
+    
+    moveForward();
+  }
+}
+
+void stopMoving() {
+
+  //Engage Brake for Channel A/Right
+  digitalWrite(rightBrake, HIGH);
+  //Engage Brake for Channel B/Left
+  digitalWrite(leftBrake, HIGH);
+}
+
+//void turnLeft() {
+//  
+//  stopMoving();
+//  delay(1000);
+//  
+//  //Disengage Brakes
+//  digitalWrite(rightBrake, LOW);//Right Brake
+//  digitalWrite(leftBrake, LOW);//Left Brake
+//
+//  //Move wheels Forward
+//  digitalWrite (rightMotor, HIGH);//Right Wheel
+//  //Move left backward 
+//  digitalWrite (leftMotor, LOW);//Left Wheel
+//
+//  //Spins motor at half speed
+//  analogWrite(rightSpeed, 100);
+//  analogWrite(leftSpeed, 30);
+//   
+//  }
