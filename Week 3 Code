@@ -1,0 +1,318 @@
+#include <Wire.h>
+#include "Adafruit_TCS34725softi2c.h"
+
+#define maxrgb 65535
+// You can use any digital pin for emulate SDA / SCL
+#define SDApinON 30
+#define SCLpinON 31
+#define SDApinSS 6
+#define SCLpinSS 7
+
+Adafruit_TCS34725softi2c tcsON = Adafruit_TCS34725softi2c(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X, SDApinON, SCLpinON);
+
+
+// for a common anode LED, connect the common pin to +5V
+// for common cathode, connect the common to ground
+// set to false if using a common cathode LED
+#define commonAnode true
+
+// our RGB -> eye-recognized gamma color
+byte gammatable[256];
+
+float h, s, v;
+
+float firstHue;
+int currColor;
+
+int assignedColor;
+int RED = 0;
+int GREEN = 1;
+int YELLOW = 2;
+int ORANGE = 3;
+int GREY = 4;
+
+
+
+
+const int SWITCH_PORT = 52;
+const int rightMotor = 12;
+const int leftMotor = 13;
+
+const int rightBrake = 9;
+const int leftBrake = 8;
+
+const int rightSpeed = 3;
+const int leftSpeed = 11;
+
+int STATE;
+const int STOP = 1;
+const int GO = 0;
+
+int IR = 53;
+
+int ValIR;
+
+
+void setupColorSensor() {
+  Serial.println("Color View Test!");
+
+  if (tcsON.begin()) {
+    Serial.println("Found sensor");
+  } else {
+    Serial.println("No TCS34725 found ... check your connections");
+    while (1); // halt!
+  }
+
+
+  for (int i = 0; i < 256; i++) {
+    float x = i;
+    x /= 255;
+    x = pow(x, 2.5);
+    x *= 255;
+
+    if (commonAnode) {
+      gammatable[i] = 255 - x;
+    } else {
+      gammatable[i] = x;
+    }
+    //Serial.println(gammatable[i]);
+  }
+
+}
+
+
+void setup() {
+
+  Serial.begin(9600);
+  Serial.println("--Serial port started--");
+  pinMode(SWITCH_PORT, INPUT);
+
+  //Channel A- Right
+  pinMode(rightMotor, OUTPUT);  //Initiates Motor
+  pinMode(rightBrake, OUTPUT);   //Initiates Brake
+
+  //Channel B-Left
+  pinMode(leftMotor, OUTPUT);  //Initiates Motor
+  pinMode(leftBrake, OUTPUT);   //Initiates Brake
+
+  pinMode(IR, INPUT); //Initiate Right Sensor
+  //pinMode(leftIR, INPUT);  //Initiate Left Sensor
+
+  setupColorSensor();
+}
+
+
+void loop() {
+
+  if (digitalRead(SWITCH_PORT)) {
+    //Serial.println("I'm on!");
+
+    //if switch is on, run the following functions
+    boundarySetup();
+    detectBoundary();
+
+    loopColorSensor();
+    saveColor();
+    afterGrey();
+
+  }
+  // if switch is off, stop moving
+  else {
+    stopMoving();
+  }
+}
+
+
+
+
+void boundarySetup() {
+
+  //Read value from IR Sensors and print in Serial Window
+    ValIR = digitalRead(IR);
+  //Serial.println(rightValIR);
+  //leftValIR = digitalRead(leftIR);
+
+  //If light surface detected, STATE is STOP
+  if (ValIR == 1) {
+    STATE = STOP;
+  }
+  //If dark surface detected, STATE is GO
+  else {
+    STATE = GO;
+  }
+}
+
+void detectBoundary() {
+
+  //Call stopMoving function if STATE is STOP
+  if (STATE == STOP) {
+    stopMoving();
+  }
+  //Call moveForward function if STATE is GO
+  if (STATE == GO) {
+    moveForward();
+  }
+}
+
+
+void loopColorSensor() {
+
+  uint16_t clear, redON, greenON, blueON;
+  uint16_t redSS, greenSS, blueSS;
+  gatherTCS(tcsON, &clear, &redON, &greenON, &blueON);
+}
+
+
+void moveForward() {
+
+  //Disengage Brakes
+  digitalWrite(rightBrake, LOW);//Right Brake
+  digitalWrite(leftBrake, LOW);//Left Brake
+
+  //Move wheels Forward
+  digitalWrite (rightMotor, HIGH);//Right Wheel
+  //Move left backward
+  digitalWrite (leftMotor, LOW);//Left Wheel
+
+  //Spins motor at half speed
+  analogWrite(rightSpeed, 60);
+  analogWrite(leftSpeed, 60);
+}
+
+
+
+void stopMoving() {
+
+  //Engage Brake for Channel A/Right
+  digitalWrite(rightBrake, HIGH);
+  //Engage Brake for Channel B/Left
+  digitalWrite(leftBrake, HIGH);
+}
+
+
+// Calculates hue, saturation and value from RGB
+void RGBtoHSV( float r, float g, float b)
+{
+  float min_rgb;
+  float max_rgb;
+  double delta;
+  min_rgb = min(min(r, g), b);
+  max_rgb = max(max(r, g), b);
+  Serial.print("min_rgb: ");
+  Serial.print(min_rgb);
+  Serial.print(" max_rgb: ");
+  Serial.println(max_rgb);
+  Serial.print(" delta: ");
+  Serial.println(delta);
+  v = max_rgb;        // v
+  delta = max_rgb - min_rgb;
+  if ( max_rgb != 0.0 )
+    s = delta / max_rgb;    // s
+  else {
+    // r = g = b = 0    // s = 0, v is undefined
+    s = 0;
+    h = -1;
+    return;
+  }
+  if ( r == max_rgb ) {
+    h = ( g - b ) / delta;    // between yellow & magenta
+  }
+  else if ( g == max_rgb ) {
+    h = 2 + ( b - r ) / delta;  // between cyan & yellow
+  }
+  else {
+    h = 4 + ( r - g ) / delta;  // between magenta & cyan
+  }
+  h *= 60;        // degrees
+  if ( h < 0 )
+    h += 360;
+}
+
+void gatherTCS(Adafruit_TCS34725softi2c tcs, uint16_t clear, uint16_t red, uint16_t green, uint16_t blue) {
+
+  tcs.setInterrupt(false);      // turn on LED
+
+  delay(60);  // takes 50ms to read
+
+  tcs.getRawData(&red, &green, &blue, &clear);
+
+  tcs.setInterrupt(true);  // turn off LED
+
+  // Figure out some basic hex code for visualization
+  uint32_t sum = clear;
+  float r, g, b;
+  r = red; r /= maxrgb;
+  g = green; g /= maxrgb;
+  b = blue; b /= maxrgb;
+  r *= 256; g *= 256; b *= 256;
+
+  RGBtoHSV(r, g, b);
+  Serial.print("hue = "); Serial.print((int)h);
+  Serial.print(" saturation = "); Serial.print((int)s);
+  Serial.print(" value = "); Serial.println((int)v);
+
+  /*
+    //Using LED for debug
+    analogWrite(redpin, gammatable[(int)r]);
+    analogWrite(greenpin, gammatable[(int)g]);
+    analogWrite(bluepin, gammatable[(int)b]);
+  */
+}
+
+void saveColor() {
+
+  if (h < 15) {
+    Serial.println("red");
+    currColor = RED;
+
+  } else if ((h < 21) && (h > 16)) {
+    Serial.println("orange");
+
+    currColor = ORANGE;
+
+  } else if ((h < 50) && (h > 40)) {
+    Serial.println("yellow");
+
+    currColor = YELLOW;
+
+  } else if ((h < 120) && (h > 50)) {
+    Serial.println("green");
+
+    currColor = GREEN;
+
+  } else if ((h < 40) && (h > 28)) {
+    Serial.println("grey");
+    currColor = GREY;
+  }
+
+}
+
+
+void afterGrey() {
+  if (currColor != GREY) {
+    Serial.println("ASSIGNED COLOR: ");
+   
+    if (currColor == RED ) {
+      assignedColor = RED;
+     Serial.print("RED");
+    }
+
+    else if (currColor == ORANGE ) {
+      assignedColor = ORANGE;
+     Serial.print("ORANGE!");
+
+    }
+
+    else if (currColor == GREEN ) {
+       assignedColor = GREEN;
+     Serial.print("GREEN!");
+    }
+
+    else  if (currColor == YELLOW ) {
+       assignedColor = YELLOW;
+      Serial.print("YELLOW!");
+
+    }
+
+    } 
+  }
