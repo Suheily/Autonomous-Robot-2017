@@ -1,0 +1,518 @@
+//===========================================================
+//   Code to obtain and print color readings on serial monitor
+//===========================================================
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "Adafruit_TCS34725softi2c.h"
+#include <SoftwareSerial.h>
+#include <Pixy.h>
+
+#define txPin 14
+
+Pixy pixy;
+
+//===========================================================
+//   Variables
+//===========================================================
+
+int currColor;
+
+int assignedColor = 0;
+int RED = 1;
+int GREEN = 2;
+int YELLOW = 3;
+int ORANGE = 4;
+int GREY = 5;
+
+
+int redVal = 5; //0 - 10
+int greenVal = 100; //95 -115
+int yellowVal = 46;//39-49
+int orangeVal = 25;//19-29
+
+
+const int SWITCH_PORT = 53;
+const int rightMotor = 12;
+const int leftMotor = 13;
+
+const int rightBrake = 9;
+const int leftBrake = 8;
+
+const int rightSpeed = 3;
+const int leftSpeed = 11;
+
+int LEFT_MOTOR_VAL = 0;
+int RIGHT_MOTOR_VAL = 0;
+float K = 0.7;
+float BASE_SPEED = 80;
+
+int CONFIDENCE;
+const int STRONG = 1;
+const int WEAK = 0;
+
+const int SLOW = 100;
+const int MEDIUM = 80;
+const int FAST = 180;
+
+int STATE;
+const int STOP = 1;
+const int GO = 0;
+
+int IR = 52;
+
+int ValIR;
+
+SoftwareSerial LCD = SoftwareSerial(0, txPin);
+const int LCDdelay = 10;
+
+int hue_f;
+int hue_b;
+
+float sat_f;
+float sat_b;
+
+static int i = 0;
+int j;
+uint16_t blocks;
+char buf[32];
+
+
+//===========================================================
+//   Setup
+//===========================================================
+
+void setup() {
+
+  Serial.begin(9600);
+  Serial.println("--Serial port started--");
+  pinMode(SWITCH_PORT, INPUT_PULLUP);
+
+  //Channel A- Right
+  pinMode(rightMotor, OUTPUT);  //Initiates Motor
+  pinMode(rightBrake, OUTPUT);   //Initiates Brake
+
+  //Channel B-Left
+  pinMode(leftMotor, OUTPUT);  //Initiates Motor
+  pinMode(leftBrake, OUTPUT);   //Initiates Brake
+
+  pinMode(IR, INPUT); //Initiate Right Sensor
+  //pinMode(leftIR, INPUT);  //Initiate Left Sensor
+
+  //setupColorSensor();
+  setupLCD();
+  pixy.init();
+}
+
+
+//===========================================================
+//   LCD Functions
+//===========================================================
+// Place cursor to specific row and column
+//    (top row = 0, bottom row = 1)
+void lcdPosition(int row, int col) {
+  LCD.write(0xFE);   //command flag
+  LCD.write((col + row * 64 + 128));  //position
+  delay(LCDdelay);
+}
+void clearLCD() {
+  LCD.write(0xFE);   //command flag
+  LCD.write(0x01);   //clear command.
+  delay(LCDdelay);
+}
+void backlightOn() {  //turns on the backlight
+  LCD.write(0x7C);   //command flag for backlight stuff
+  LCD.write(157);    //light level.
+  delay(LCDdelay);
+}
+void backlightOff() { //turns off the backlight
+  LCD.write(0x7C);   //command flag for backlight stuff
+  LCD.write(128);     //light level for off.
+  delay(LCDdelay);
+}
+void serCommand() {  //a general function to call the command flag for issuing all other commands
+  LCD.write(0xFE);
+}
+void setupLCD()
+{
+  pinMode(txPin, OUTPUT);
+  LCD.begin(9600);
+  clearLCD();
+  lcdPosition(0, 3);
+  LCD.print("Black Lives");
+  lcdPosition(1, 5);
+  LCD.print("Matter");
+}
+
+
+//===========================================================
+//   RGB Color Sensor Setup --- Do not edit
+//===========================================================
+
+#define maxrgb 65535
+// You can use any digital pin for emulate SDA / SCL
+#define SDApinON_front 30
+#define SCLpinON_front 31
+
+#define SDApinON_back 32
+#define SCLpinON_back 33
+
+#define SDApinSS 6
+#define SCLpinSS 7
+
+
+
+Adafruit_TCS34725softi2c tcsON_front = Adafruit_TCS34725softi2c(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X, SDApinON_front, SCLpinON_front);
+Adafruit_TCS34725softi2c tcsON_back = Adafruit_TCS34725softi2c(TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X, SDApinON_back, SCLpinON_back);
+
+
+#define commonAnode true
+
+// our RGB -> eye-recognized gamma color
+byte gammatable[256];
+
+float h, s, v;
+
+void setupColorSensor() {
+  Serial.println("Color View Test!");
+
+  if (tcsON_front.begin() && tcsON_back.begin()) {
+    Serial.println("Found two sensors");
+  } else {
+    Serial.println("No TCS34725 found ... check your connections");
+    while (1); // halt!
+  }
+
+  for (int i = 0; i < 256; i++) {
+    float x = i;
+    x /= 255;
+    x = pow(x, 2.5);
+    x *= 255;
+
+    if (commonAnode) {
+      gammatable[i] = 255 - x;
+    } else {
+      gammatable[i] = x;
+    }
+    //Serial.println(gammatable[i]);
+  }
+}
+
+void loopColorSensor() {
+
+  uint16_t clear, redON, greenON, blueON;
+  uint16_t redSS, greenSS, blueSS;
+  gatherTCS(tcsON_front, &clear, &redON, &greenON, &blueON);
+  hue_f = h;
+  sat_f = s;
+  Serial.print("Front Hue & Sat\t");
+  Serial.print(hue_f);
+  Serial.print("\t");
+  Serial.print(sat_f);
+   Serial.print("\n");
+  
+  gatherTCS(tcsON_back, &clear, &redON, &greenON, &blueON);
+  hue_b = h;
+  sat_b = s;
+  Serial.print("Back Hue & Sat\t");
+  Serial.print(hue_b);
+  Serial.print("\t");
+  Serial.print(sat_b);
+  Serial.print("\n");
+}
+
+// Calculates hue, saturation and value from RGB
+void RGBtoHSV( float r, float g, float b)
+{
+  float min_rgb;
+  float max_rgb;
+  double delta;
+  min_rgb = min(min(r, g), b);
+  max_rgb = max(max(r, g), b);
+  v = max_rgb;        // v
+  delta = max_rgb - min_rgb;
+  //  Serial.print("min_rgb: ");
+  //  Serial.print(min_rgb);
+  //  Serial.print(" max_rgb: ");
+  //  Serial.println(max_rgb);
+  //  Serial.print(" delta: ");
+  //  Serial.println(delta);
+
+  if ( max_rgb != 0.0 )
+    s = delta / max_rgb;    // s
+  else {
+    // r = g = b = 0    // s = 0, v is undefined
+    s = 0;
+    h = -1;
+    return;
+  }
+  if ( r == max_rgb ) {
+    h = ( g - b ) / delta;    // between yellow & magenta
+  }
+  else if ( g == max_rgb ) {
+    h = 2 + ( b - r ) / delta;  // between cyan & yellow
+  }
+  else {
+    h = 4 + ( r - g ) / delta;  // between magenta & cyan
+  }
+  h *= 60;        // degrees
+  if ( h < 0 )
+    h += 360;
+}
+
+void gatherTCS(Adafruit_TCS34725softi2c tcs, uint16_t clear, uint16_t red, uint16_t green, uint16_t blue) {
+
+  tcs.setInterrupt(false);      // turn on LED
+
+  delay(60);  // takes 50ms to read
+
+  tcs.getRawData(&red, &green, &blue, &clear);
+
+  tcs.setInterrupt(true);  // turn off LED
+
+  // Figure out some basic hex code for visualization
+  uint32_t sum = clear;
+  float r, g, b;
+  r = red; r /= maxrgb;
+  g = green; g /= maxrgb;
+  b = blue; b /= maxrgb;
+  r *= 256; g *= 256; b *= 256;
+
+  RGBtoHSV(r, g, b);
+  //  Serial.print("hue = "); Serial.print((int)h);
+  //    Serial.print(" saturation = "); Serial.print((float)s);
+  //    Serial.print(" value = "); Serial.println((float)v);
+
+  getHue((int)h);
+  //Serial.print("\n");
+  getSat((float)s);
+  //Serial.print("\n");
+  //Serial.print(",");
+  //Serial.println((float)v);
+
+  /*
+      //Using LED for debug
+      analogWrite(redpin, gammatable[(int)r]);
+      analogWrite(greenpin, gammatable[(int)g]);
+      analogWrite(bluepin, gammatable[(int)b]);
+  */
+}
+
+//===========================================================
+//   LOOP Function
+//===========================================================
+void loop() {
+
+  // boundarySetup();
+  //detectBoundary();
+  if (digitalRead(SWITCH_PORT)) {
+   // Serial.println("I AM ON");
+    loopColorSensor();
+ 
+    saveColor(hue_f);
+    saveColor(hue_b);
+
+
+    LEFT_MOTOR_VAL = 80;
+    RIGHT_MOTOR_VAL = 80;
+
+
+  } else {
+
+    LEFT_MOTOR_VAL =  -BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    delay(1000);
+    motorControl();
+
+    LEFT_MOTOR_VAL =  BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+    motorControl();
+    
+
+  }
+  // update motor speed once per loop.
+  motorControl();
+}
+
+
+
+
+
+//
+
+
+
+//===========================================================
+//   RGB Color Sensor Functions
+//===========================================================
+
+
+
+int getHue(int h) {
+  return h; 
+  }
+
+float getSat(float s) {
+  return s;
+  }
+  
+void saveColor(int hue) {
+  int hueReadings[6];
+  
+  //Find difference between hue reading and average hue value
+  // for each color
+  int diffR = abs(redVal - h);
+  int diffO = abs(orangeVal - h);
+  int diffY = abs(yellowVal - h);
+  int diffG = abs(greenVal - h);
+
+  //Find min of these differences
+
+  int minDiff = min(diffR, min(diffO , min (diffY, diffG)));
+
+  //The closer the difference is to 0, the more confident the robot
+  // is in the color it detected
+
+  if (minDiff < 8  && minDiff >= 0) {
+    CONFIDENCE = STRONG;
+  }
+  else {
+    CONFIDENCE = WEAK;
+  }
+
+  if (minDiff == diffR) {
+    Serial.println(" red");
+    currColor = RED;
+
+  } else if (minDiff == diffO) {
+    Serial.println(" orange");
+    currColor = ORANGE;
+
+
+  } else if (minDiff == diffY) {
+    Serial.println(" yellow");
+    currColor = YELLOW;
+
+
+  } else if (minDiff == diffG) {
+    Serial.println(" green");
+
+    currColor = GREEN;
+
+
+  } else if ((h < 120) && (h >= 100)) {
+    Serial.println(" grey");
+    currColor = GREY;
+  }
+
+}
+
+
+void afterGrey() {
+  if (currColor != GREY && assignedColor == 0 ) {
+    //Serial.println("  ASSIGNED COLOR: ");
+
+    if (currColor == RED ) {
+      assignedColor = RED;
+      //Serial.println("RED");
+    }
+
+    else if (currColor == ORANGE ) {
+      assignedColor = ORANGE;
+      //Serial.println("ORANGE!");
+
+    }
+
+    else if (currColor == GREEN ) {
+      assignedColor = GREEN;
+      //Serial.println("GREEN!");
+    }
+
+    else  if (currColor == YELLOW ) {
+      assignedColor = YELLOW;
+      //Serial.println("YELLOW!");
+
+    }
+  }
+}
+
+
+//===========================================================
+//   IR Sensor Functions
+//===========================================================
+void boundarySetup() {
+
+  //Read value from IR Sensors and print in Serial Window
+  ValIR = digitalRead(IR);
+  //Serial.println(rightValIR);
+  //leftValIR = digitalRead(leftIR);
+
+  //If light surface detected, STATE is STOP
+  if (ValIR == 1) {
+    STATE = STOP;
+  }
+  //If dark surface detected, STATE is GO
+  else {
+    STATE = GO;
+  }
+}
+
+void detectBoundary() {
+
+  //STATE is STOP
+  if (STATE == STOP) {
+    //Back up
+    LEFT_MOTOR_VAL = - BASE_SPEED;
+    RIGHT_MOTOR_VAL = -BASE_SPEED;
+    //Turn around
+    LEFT_MOTOR_VAL = - BASE_SPEED;
+    RIGHT_MOTOR_VAL = BASE_SPEED;
+  }
+}
+
+//===========================================================
+//   Motion Functions
+//===========================================================
+
+void motorControl() {
+  int left_speed = LEFT_MOTOR_VAL;
+  int right_speed = RIGHT_MOTOR_VAL;
+
+//  Serial.print("Left: ");
+//  Serial.print(left_speed);
+//  Serial.print("  Right: ");
+//  Serial.println(right_speed);
+
+  if (left_speed == 0) {
+    //Engage Brakes
+    digitalWrite(leftBrake, HIGH);//Left Brake
+  }
+  else {
+    //Disengage Brakes
+    digitalWrite(leftBrake, LOW);//Left Brake
+  }
+  if (right_speed == 0) {
+    //Engage Brakes
+    digitalWrite(rightBrake, HIGH);//Right Brake
+  }
+  else {
+    //Disengage Brakes
+    digitalWrite(rightBrake, LOW);//Right Brake
+  }
+  if (left_speed < 0) {
+    digitalWrite (leftMotor, HIGH);//Left Wheel turns backwards
+
+  } else {
+    digitalWrite (leftMotor, LOW);//Left Wheel turns forward
+  }
+  if (right_speed < 0) {
+    digitalWrite (rightMotor, LOW);//Right Wheel turns backwards
+
+  } else {
+    digitalWrite (rightMotor, HIGH);//Right Wheel turns forward
+  }
+
+  analogWrite(rightSpeed, abs(right_speed));
+  analogWrite(leftSpeed, abs(left_speed));
+
+}
