@@ -1,0 +1,16 @@
+// Digital IR Sensor Test 
+
+#define IR 53
+int ValIR;
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  pinMode(IR, INPUT);
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  ValIR = digitalRead(IR);
+  Serial.print("IR = ");Serial.println(ValIR);
+}
