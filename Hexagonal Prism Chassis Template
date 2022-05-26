@@ -1,0 +1,42 @@
+// Team Spice 
+// Hexagonal Prism Chassis Template
+// Credit to Laura Taalman for her PolyBowl designs on YouTube
+//https://www.youtube.com/watch?v=kn1aqnHF1RE
+// Credit to Nicholas Livingston for hollow peg concept
+
+
+// VARIABLES!!!
+radius = 30;
+sides = 6;
+thickness = 3;
+bodyHeight = 50;
+baseHeight = 10;
+
+// BASE!!!
+
+//this makes it tall
+linear_extrude(height = baseHeight)
+    polyShape(solid="yes");        
+
+// BODY!!!
+
+//this makes it sit on the base
+translate([0,0,10])
+// this makes it tall
+linear_extrude(height = bodyHeight)
+// this makes it hollow
+polyShape( solid ="no" );
+
+// this makes it a hexagon
+module polyShape(solid){
+    difference(){
+            // Solid outside shape
+            offset( r=6, $fn = 48 )
+        circle( r=radius, $fn=sides );
+            // Hollow inside shape
+            if( solid == "no"){
+            offset( r=6-thickness, $fn = 48 )
+        circle( r=radius, $fn=sides );
+        }
+    }
+}
